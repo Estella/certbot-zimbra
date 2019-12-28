@@ -46,9 +46,6 @@ exitfunc(){
 
 	# close fd used for locking, workaround for issue #89
 	exec 200>&-
-	if $LOCKED; then
-		rm "$TEMPPATH/$PROGNAME.lck"
-	fi
 
 	exit "$e"
 }
@@ -72,7 +69,10 @@ get_lock(){
 	exec 200> "$TEMPPATH/$PROGNAME.lck"
 	! flock -n 200 && echo "Error: can't get exclusive lock. Another instance of this script may be running.
 If you are sure there is no other instance of this script running (check with \"ps afx\") you can remove $TEMPPATH/$PROGNAME.lck and try again." && exit 1
-	LOCKED=true
+}
+
+unflock(){
+	flock -o 200 -c "$*"
 }
 
 prompt(){
@@ -226,7 +226,7 @@ patch_nginx() {
 
 	! "$QUIET" && echo "Running zmproxyctl restart."
 	# reload nginx config
-	su - zimbra -c 'zmproxyctl restart'; e="$?"
+	unflock su - zimbra -c \"zmproxyctl restart\"; e="$?"
 	if [ "$e" -ne 0 ]; then
 		echo "Error restarting zmproxy (zmproxyctl exit status $e). Exiting."
 		exit 1
@@ -346,7 +346,7 @@ request_cert() {
 
 	#TODO: dry-run
 
-	"$LE_NONIACT" && LE_PARAMS="--non-interactive"
+	"$LE_NONIACT" && LE_PARAMS="$LE_PARAMS --non-interactive"
 	"$QUIET" && LE_PARAMS="$LE_PARAMS --quiet"
 	"$LE_AGREE_TOS" && LE_PARAMS="$LE_PARAMS --agree-tos"
 	# use --cert-name instead of --expand as it allows also removing domains? https://github.com/certbot/certbot/issues/4275
@@ -360,7 +360,7 @@ request_cert() {
 	"$QUIET" && exec > /dev/null
 	"$QUIET" && exec 2>/dev/null
 	# Request our cert
-	$LE_BIN certonly $LE_PARAMS
+	unflock "$LE_BIN" certonly $LE_PARAMS
 	e=$?
 	"$QUIET" && exec > /dev/stdout
 	"$QUIET" && exec 2> /dev/stderr
@@ -421,9 +421,9 @@ prepare_cert() {
 
 	# Test cert. 8.6 and below must use root
 	if version_gt "$DETECTED_ZIMBRA_VERSION" "8.7"; then
-		su - zimbra -c "$ZMPATH/bin/zmcertmgr verifycrt comm $tmpcerts/privkey.pem $tmpcerts/cert.pem $tmpcerts/zimbra_chain.pem"
+		unflock su - zimbra -c \""$ZMPATH/bin/zmcertmgr" verifycrt comm "$tmpcerts/privkey.pem" "$tmpcerts/cert.pem" "$tmpcerts/zimbra_chain.pem"\"
 	else
-		$ZMPATH/bin/zmcertmgr verifycrt comm "$tmpcerts/privkey.pem" "$tmpcerts/cert.pem" "$tmpcerts/zimbra_chain.pem"
+		unflock "$ZMPATH/bin/zmcertmgr" verifycrt comm "$tmpcerts/privkey.pem" "$tmpcerts/cert.pem" "$tmpcerts/zimbra_chain.pem"
 	fi
 
 	# undo quiet
@@ -457,9 +457,9 @@ deploy_cert() {
 	"$QUIET" && exec 2>/dev/null
 	# this is it, deploy the cert.
 	if version_gt "$DETECTED_ZIMBRA_VERSION" "8.7"; then
-		su - zimbra -c "$ZMPATH/bin/zmcertmgr deploycrt comm $tmpcerts/cert.pem $tmpcerts/zimbra_chain.pem -deploy ${SERVICES}"
+		unflock su - zimbra -c \""$ZMPATH/bin/zmcertmgr" deploycrt comm "$tmpcerts/cert.pem" "$tmpcerts/zimbra_chain.pem" -deploy ${SERVICES}\"
 	else
-		$ZMPATH/bin/zmcertmgr deploycrt comm "$tmpcerts/cert.pem" "$tmpcerts/zimbra_chain.pem"
+		unflock "$ZMPATH/bin/zmcertmgr" deploycrt comm "$tmpcerts/cert.pem" "$tmpcerts/zimbra_chain.pem"
 	fi
 	"$QUIET" && exec > /dev/stdout
 	"$QUIET" && exec 2> /dev/stderr
@@ -479,7 +479,7 @@ deploy_cert() {
 		"$QUIET" && exec > /dev/null
 		"$QUIET" && exec 2> /dev/null
 		# Finally apply cert!
-		su - zimbra -c 'zmcontrol restart'
+		unflock su - zimbra -c \"zmcontrol restart\"
 		# FIXME And hope that everything started fine! :)
 		"$QUIET" && exec > /dev/stdout
 		"$QUIET" && exec 2> /dev/stderr
